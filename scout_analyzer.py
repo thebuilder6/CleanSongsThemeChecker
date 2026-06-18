@@ -17,21 +17,22 @@ st.title("🎵 Scout Music Theme Analyzer")
 st.write("Paste a Spotify playlist link below to automatically check songs for teen appropriateness.")
 
 # ==========================================
-# 1. SIDEBAR CONFIGURATION (Hidden from mom once set up)
+# 1. SECRETS LOADING (Completely hidden from UI)
+# ==========================================
+SPOTIPY_CLIENT_ID = os.getenv('SPOTIPY_CLIENT_ID')
+SPOTIPY_CLIENT_SECRET = os.getenv('SPOTIPY_CLIENT_SECRET')
+GEMINI_API_KEY = os.getenv('GEMINI_API_KEY')
+
+# ==========================================
+# 2. SIDEBAR CONFIGURATION (User settings only)
 # ==========================================
 with st.sidebar:
     st.header("⚙️ Settings")
-    st.caption("These credentials are automatically loaded from your project, but you can update them here.")
-    
-    spotipy_id = st.text_input("Spotify Client ID", value=os.getenv('SPOTIPY_CLIENT_ID', ''), type="password")
-    spotipy_secret = st.text_input("Spotify Client Secret", value=os.getenv('SPOTIPY_CLIENT_SECRET', ''), type="password")
-    gemini_key = st.text_input("Gemini API Key", value=os.getenv('GEMINI_API_KEY', ''), type="password")
-    
     # Keeping Search disabled by default to save her quota limits
     enable_search = st.checkbox("Enable Google Search Grounding", value=False)
 
 # ==========================================
-# 2. HELPER FUNCTIONS
+# 3. HELPER FUNCTIONS
 # ==========================================
 def get_playlist_tracks(playlist_url, sp_client):
     try:
@@ -91,7 +92,7 @@ def analyze_songs_in_batches(song_batch, gemini_client):
         return f"Error: {e}"
 
 # ==========================================
-# 3. USER INTERFACE
+# 4. USER INTERFACE
 # ==========================================
 playlist_link = st.text_input(
     "Enter Spotify Playlist Link:", 
@@ -99,17 +100,18 @@ playlist_link = st.text_input(
 )
 
 if st.button("🚀 Start Song Safety Check", use_container_width=True):
-    if not spotipy_id or not spotipy_secret or not gemini_key:
-        st.warning("⚠️ Configuration keys are missing. Please expand the sidebar on the left and enter your API keys.")
+    # Check if the environment variables are successfully loaded in the background
+    if not SPOTIPY_CLIENT_ID or not SPOTIPY_CLIENT_SECRET or not GEMINI_API_KEY:
+        st.error("⚠️ App Configuration Error: The required API keys are missing. Please verify your .env file or Streamlit Secrets are set up correctly.")
     elif not playlist_link:
         st.warning("⚠️ Please paste a Spotify playlist link first.")
     else:
-        # Initialize clients with the UI-provided credentials
+        # Initialize clients silently using background environment variables
         sp = spotipy.Spotify(auth_manager=SpotifyClientCredentials(
-            client_id=spotipy_id,
-            client_secret=spotipy_secret
+            client_id=SPOTIPY_CLIENT_ID,
+            client_secret=SPOTIPY_CLIENT_SECRET
         ))
-        gem_client = genai.Client(api_key=gemini_key)
+        gem_client = genai.Client(api_key=GEMINI_API_KEY)
         
         # 1. Fetch Songs
         with st.spinner("Fetching songs from Spotify..."):
@@ -204,7 +206,7 @@ if st.button("🚀 Start Song Safety Check", use_container_width=True):
             status_text.text("Analysis Complete!")
             
             # ==========================================
-            # 4. FINAL REPORT PRESENTATION
+            # 5. FINAL REPORT PRESENTATION
             # ==========================================
             st.write("---")
             st.header("📊 Final Review Report")
@@ -241,7 +243,7 @@ if st.button("🚀 Start Song Safety Check", use_container_width=True):
                         st.balloons()
             
             # ==========================================
-            # 5. COMPREHENSIVE DOWNLOABLE REPORT
+            # 6. COMPREHENSIVE DOWNLOADABLE REPORT
             # ==========================================
             st.write("---")
             with st.expander("📝 Show Comprehensive Flagged Songs Report (Printable/Copyable Text)"):
