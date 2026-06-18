@@ -1,6 +1,7 @@
 import streamlit as st
 import spotipy
 from spotipy.oauth2 import SpotifyOAuth
+from spotipy.cache_handler import MemoryCacheHandler
 from google import genai
 from google.genai import types
 import time
@@ -66,7 +67,7 @@ sp_oauth = SpotifyOAuth(
     client_secret=SPOTIPY_CLIENT_SECRET,
     redirect_uri=SPOTIPY_REDIRECT_URI,
     scope='playlist-modify-public playlist-modify-private playlist-read-private playlist-read-collaborative',
-    cache_path=".spotifycache",
+    cache_handler=MemoryCacheHandler(), 
     show_dialog=True
 )
 
@@ -81,13 +82,21 @@ if "token_info" not in st.session_state:
             st.session_state.token_info = token_info
             # Clear the browser address bar query code to keep it clean
             st.query_params.clear()
+            st.rerun()
         except Exception as e:
             st.error(f"Failed to authenticate with Spotify: {e}")
-    else:
-        # Check if we have a valid cached token locally
-        cached_token = sp_oauth.get_cached_token()
-        if cached_token:
-            st.session_state.token_info = cached_token
+
+# Check if session token exists, and refresh it silently if it is expired
+if "token_info" in st.session_state:
+    if sp_oauth.is_token_expired(st.session_state.token_info):
+        try:
+            new_token = sp_oauth.refresh_access_token(st.session_state.token_info['refresh_token'])
+            st.session_state.token_info = new_token
+        except Exception as e:
+            st.error(f"Session expired. Please reconnect your account. Error: {e}")
+            del st.session_state.token_info
+            st.rerun()
+
 
 # ==========================================
 # 4. LOGIN SCREEN (If not authenticated)
@@ -211,7 +220,7 @@ if st.button("🚀 Start Song Safety Check", use_container_width=True):
             status_text = st.empty()
             log_container = st.container()
             
-            batch_size = 20
+            batch_size = 25
             total_songs = len(songs)
             
             # 2. Process Batches
@@ -222,7 +231,9 @@ if st.button("🚀 Start Song Safety Check", use_container_width=True):
                 
                 status_text.text(f"Analyzing batch {current_batch_num} of {total_batches}...")
                 
+                request_start = time.time()
                 batch_result = analyze_songs_in_batches(batch, gem_client)
+                request_elapsed = time.time() - request_start
                 
                 # Split the text by the "---" separator
                 song_blocks = batch_result.split('---')
@@ -287,8 +298,11 @@ if st.button("🚀 Start Song Safety Check", use_container_width=True):
                 progress_percent = min((i + batch_size) / total_songs, 1.0)
                 progress_bar.progress(progress_percent)
                 
-                # Wait to prevent rate limits
-                time.sleep(4)
+                # Wait only the remaining time to respect 15 RPM (4s interval)
+                rate_limit_interval = 4.0
+                remaining_wait = rate_limit_interval - request_elapsed
+                if remaining_wait > 0:
+                    time.sleep(remaining_wait)
                 
             status_text.text("Analysis Complete!")
             st.session_state.analyzed = True
@@ -300,6 +314,18 @@ if st.session_state.analyzed:
     st.write("---")
     st.header("📊 Final Review Report")
     
+        # ------------------------------------------
+    # CHECK CHOSEN BORDERLINE SONGS DYNAMICALLY
+    # ------------------------------------------
+    approved_borderline_songs = []
+    if st.session_state.borderline_songs:
+        for song in st.session_state.borderline_songs:
+            # We fetch checkbox state by checking session state keys directly
+            if st.session_state.get(f"approve_{song['uri']}", False):
+                approved_borderline_songs.append(song)
+                
+    total_approved_count = len(st.session_state.safe_songs) + len(approved_borderline_songs)
+
     col1, col2, col3 = st.columns(3)
     col1.metric(label="✅ Safe Songs", value=len(st.session_state.safe_songs))
     col2.metric(label="⚠️ Borderline", value=len(st.session_state.borderline_songs))
@@ -313,23 +339,23 @@ if st.session_state.analyzed:
         if st.button("➕ Create Clean Copy on Spotify", use_container_width=True, type="primary"):
             with st.spinner("Creating your clean playlist..."):
                 try:
-                    user_id = sp.current_user()['id']
                     clean_name = f"{st.session_state.playlist_name} (Clean Version)"
                     
-                    new_playlist = sp.user_playlist_create(
-                        user=user_id,
+                    # Modernized /me/playlists call replaces user_playlist_create to prevent 403 errors
+                    new_playlist = sp.current_user_playlist_create(
                         name=clean_name,
                         public=False,
                         description="Automatically generated clean version of the playlist for scouting events."
                     )
                     
                     new_playlist_id = new_playlist['id']
-                    safe_uris = [song['uri'] for song in st.session_state.safe_songs if song['uri'] is not None]
+                    all_safe_uris = [song['uri'] for song in st.session_state.safe_songs if song['uri'] is not None]
+                    all_safe_uris += [song['uri'] for song in approved_borderline_songs if song['uri'] is not None]
                     
-                    for k in range(0, len(safe_uris), 100):
-                        sp.playlist_add_items(new_playlist_id, safe_uris[k:k+100])
+                    for k in range(0, len(all_safe_uris), 100):
+                        sp.playlist_add_items(new_playlist_id, all_safe_uris[k:k+100])
                         
-                    st.success(f"🎉 **Success!** Created **'{clean_name}'** on your Spotify account with {len(safe_uris)} safe songs!")
+                    st.success(f"🎉 **Success!** Created **'{clean_name}'** on your Spotify account with {len(all_safe_uris)} safe songs!")
                 except Exception as e:
                     st.error(f"Could not create playlist on Spotify: {e}")
                     
@@ -338,11 +364,17 @@ if st.session_state.analyzed:
     
     with tab1:
         if st.session_state.borderline_songs:
-            st.write("Review these songs and click below to read details:")
+            st.write("Review these songs. **Check the box inside any card** to approve and add it to your final clean playlist copy:")
             for idx, song in enumerate(st.session_state.borderline_songs):
                 with st.expander(f"🔍 {idx+1}. {song['name']}"):
                     st.markdown(f"**Assigned Rating:** 2-Borderline")
                     st.info(f"**Why it was flagged:** {song['reason']}")
+                    
+                    # Manual approval checkbox
+                    st.checkbox(
+                        "Approve this song for the clean duplicate playlist", 
+                        key=f"approve_{song['uri']}"
+                    )
         else:
             st.success("No borderline songs found in this playlist!")
             
@@ -372,7 +404,9 @@ if st.session_state.analyzed:
             report_text += f"⚠️ BORDERLINE SONGS (Requires Manual Review) - Total: {len(st.session_state.borderline_songs)}\n"
             report_text += f"-"*40 + "\n"
             for idx, song in enumerate(st.session_state.borderline_songs, 1):
-                report_text += f"{idx}. {song['name']}\n"
+                # Add approval marker to report output
+                status_marker = "[APPROVED BY LEADER]" if st.session_state.get(f"approve_{song['uri']}", False) else "[PENDING/REJECTED]"
+                report_text += f"{idx}. {song['name']} {status_marker}\n"
                 report_text += f"   - Reasoning: {song['reason']}\n\n"
         else:
             report_text += "✅ No borderline songs identified.\n\n"
