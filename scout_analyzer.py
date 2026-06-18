@@ -23,7 +23,7 @@ st.write("Evaluate Spotify playlists for teen appropriateness and download/clone
 SPOTIPY_CLIENT_ID = os.getenv('SPOTIPY_CLIENT_ID')
 SPOTIPY_CLIENT_SECRET = os.getenv('SPOTIPY_CLIENT_SECRET')
 # If running locally, default redirect is localhost:8501 (Streamlit's local address)
-SPOTIPY_REDIRECT_URI = os.getenv('SPOTIPY_REDIRECT_URI', 'http://127.0.0.1:8501')
+SPOTIPY_REDIRECT_URI = os.getenv('SPOTIPY_REDIRECT_URI', 'http://172.0.0.1:8501')
 GEMINI_API_KEY = os.getenv('GEMINI_API_KEY')
 
 # Safely attempt to override with Streamlit Cloud Secrets (if they exist)
@@ -85,6 +85,11 @@ if "token_info" not in st.session_state:
             st.rerun()
         except Exception as e:
             st.error(f"Failed to authenticate with Spotify: {e}")
+    else:
+        # Check if we have a valid cached token locally
+        cached_token = sp_oauth.get_cached_token()
+        if cached_token:
+            st.session_state.token_info = cached_token
 
 # Check if session token exists, and refresh it silently if it is expired
 if "token_info" in st.session_state:
@@ -198,13 +203,19 @@ playlist_link = st.text_input(
     placeholder="https://open.spotify.com/playlist/..."
 )
 
+# Strip tracking parameters (everything after '?') from the link immediately
+cleaned_link = playlist_link.split('?')[0].strip() if playlist_link else ""
+
 if st.button("🚀 Start Song Safety Check", use_container_width=True):
     if not playlist_link:
         st.warning("⚠️ Please paste a Spotify playlist link first.")
     else:
+
+        st.session_state.cleaned_link = cleaned_link
+
         # 1. Fetch Songs & Details
         with st.spinner("Fetching songs from Spotify..."):
-            playlist_name, songs = get_playlist_details(playlist_link, sp)
+            playlist_name, songs = get_playlist_details(cleaned_link, sp)
             st.session_state.playlist_name = playlist_name
             
         if songs:
@@ -263,9 +274,12 @@ if st.button("🚀 Start Song Safety Check", use_container_width=True):
                         elif line_stripped.upper().startswith("REASON:"):
                             reason = line_stripped[7:].strip()
                     
-                    # Associate the Spotify URI
+
+                    # Fuzzy Alphanumeric URI Matching (completely ignores spaces and punctuation)
                     for s_name, s_artist, s_uri in batch:
-                        if s_name.lower() in song_name.lower():
+                        clean_s_name = "".join(c for c in s_name.lower() if c.isalnum())
+                        clean_song_name = "".join(c for c in song_name.lower() if c.isalnum())
+                        if clean_s_name in clean_song_name or clean_song_name in clean_s_name:
                             track_uri = s_uri
                             break
                     
@@ -314,14 +328,15 @@ if st.session_state.analyzed:
     st.write("---")
     st.header("📊 Final Review Report")
     
-        # ------------------------------------------
+    # ------------------------------------------
     # CHECK CHOSEN BORDERLINE SONGS DYNAMICALLY
     # ------------------------------------------
     approved_borderline_songs = []
     if st.session_state.borderline_songs:
-        for song in st.session_state.borderline_songs:
+        for idx, song in enumerate(st.session_state.borderline_songs):
             # We fetch checkbox state by checking session state keys directly
-            if st.session_state.get(f"approve_{song['uri']}", False):
+            unique_key = song['uri'] if song['uri'] else f"no_uri_{idx}_{song['name']}"
+            if st.session_state.get(f"approve_{unique_key}", False):
                 approved_borderline_songs.append(song)
                 
     total_approved_count = len(st.session_state.safe_songs) + len(approved_borderline_songs)
@@ -331,8 +346,8 @@ if st.session_state.analyzed:
     col2.metric(label="⚠️ Borderline", value=len(st.session_state.borderline_songs))
     col3.metric(label="🚨 Inappropriate", value=len(st.session_state.inappropriate_songs))
     
-    # CLONE PLAYLIST COMPONENT
-    if st.session_state.safe_songs:
+    # CLONE PLAYLIST COMPONENT (Adjusted to check total_approved_count)
+    if total_approved_count > 0:
         st.subheader("🪄 Make a Clean Duplicate Playlist")
         st.write("Click this button to automatically create a brand new, pre-cleaned duplicate of this playlist on your Spotify account.")
         
@@ -371,9 +386,10 @@ if st.session_state.analyzed:
                     st.info(f"**Why it was flagged:** {song['reason']}")
                     
                     # Manual approval checkbox
+                    unique_key = song['uri'] if song['uri'] else f"no_uri_{idx}_{song['name']}"
                     st.checkbox(
                         "Approve this song for the clean duplicate playlist", 
-                        key=f"approve_{song['uri']}"
+                        key=f"approve_{unique_key}"
                     )
         else:
             st.success("No borderline songs found in this playlist!")
@@ -397,16 +413,17 @@ if st.session_state.analyzed:
         
         report_text = f"SCOUT MUSIC PLAYLIST REPORT\n"
         report_text += f"Playlist: {st.session_state.playlist_name}\n"
-        report_text += f"Playlist URL: {playlist_link}\n"
+        report_text += f"Playlist URL: {st.session_state.cleaned_link}\n"
         report_text += f"="*40 + "\n\n"
         
         if st.session_state.borderline_songs:
             report_text += f"⚠️ BORDERLINE SONGS (Requires Manual Review) - Total: {len(st.session_state.borderline_songs)}\n"
             report_text += f"-"*40 + "\n"
-            for idx, song in enumerate(st.session_state.borderline_songs, 1):
-                # Add approval marker to report output
-                status_marker = "[APPROVED BY LEADER]" if st.session_state.get(f"approve_{song['uri']}", False) else "[PENDING/REJECTED]"
-                report_text += f"{idx}. {song['name']} {status_marker}\n"
+            for idx, song in enumerate(st.session_state.borderline_songs):
+                # Add approval marker to report output (offset idx correctly by using standard 0-based indexing for the state check)
+                unique_key = song['uri'] if song['uri'] else f"no_uri_{idx}_{song['name']}"
+                status_marker = "[APPROVED BY LEADER]" if st.session_state.get(f"approve_{unique_key}", False) else "[PENDING/REJECTED]"
+                report_text += f"{idx+1}. {song['name']} {status_marker}\n"
                 report_text += f"   - Reasoning: {song['reason']}\n\n"
         else:
             report_text += "✅ No borderline songs identified.\n\n"
