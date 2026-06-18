@@ -211,7 +211,7 @@ if st.button("🚀 Start Song Safety Check", use_container_width=True):
             status_text = st.empty()
             log_container = st.container()
             
-            batch_size = 10
+            batch_size = 20
             total_songs = len(songs)
             
             # 2. Process Batches
@@ -288,7 +288,7 @@ if st.button("🚀 Start Song Safety Check", use_container_width=True):
                 progress_bar.progress(progress_percent)
                 
                 # Wait to prevent rate limits
-                time.sleep(5)
+                time.sleep(4)
                 
             status_text.text("Analysis Complete!")
             st.session_state.analyzed = True
