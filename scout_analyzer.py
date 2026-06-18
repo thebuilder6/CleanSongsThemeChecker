@@ -19,9 +19,10 @@ st.write("Paste a Spotify playlist link below to automatically check songs for t
 # ==========================================
 # 1. SECRETS LOADING (Completely hidden from UI)
 # ==========================================
-SPOTIPY_CLIENT_ID = os.getenv('SPOTIPY_CLIENT_ID')
-SPOTIPY_CLIENT_SECRET = os.getenv('SPOTIPY_CLIENT_SECRET')
-GEMINI_API_KEY = os.getenv('GEMINI_API_KEY')
+# Check Streamlit's native Secrets manager first, then fall back to local .env file
+SPOTIPY_CLIENT_ID = st.secrets.get('SPOTIPY_CLIENT_ID') or os.getenv('SPOTIPY_CLIENT_ID')
+SPOTIPY_CLIENT_SECRET = st.secrets.get('SPOTIPY_CLIENT_SECRET') or os.getenv('SPOTIPY_CLIENT_SECRET')
+GEMINI_API_KEY = st.secrets.get('GEMINI_API_KEY') or os.getenv('GEMINI_API_KEY')
 
 # ==========================================
 # 2. SIDEBAR CONFIGURATION (User settings only)
